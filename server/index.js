@@ -4,11 +4,15 @@ const crypto = require('crypto');
 
 const PORT = process.env.PORT || 3001;
 
-// Room storage: { roomId: { users: Map, createdAt: Date, name: string } }
+// Room storage: { roomId: { users: Map, createdAt: Date, name: string, veto: object } }
 const rooms = new Map();
 
 // Global room (the default public room with bots)
 const GLOBAL_ROOM_ID = 'global';
+
+// Veto threshold - when collective boredom exceeds this, veto becomes available
+const VETO_THRESHOLD = 66;
+const VETO_DURATION = 15000; // 15 seconds to vote
 
 // Generate short room codes
 const generateRoomCode = () => {
@@ -81,13 +85,100 @@ const getRoomStats = (roomId) => {
     name: u.name || null
   }));
 
+  // Include veto state
+  const veto = room.veto ? {
+    active: true,
+    initiator: room.veto.initiatorName || 'Someone',
+    votes: room.veto.votes.size,
+    needed: Math.ceil(count / 2),
+    timeLeft: Math.max(0, Math.ceil((room.veto.endTime - Date.now()) / 1000))
+  } : null;
+
   return {
     average,
     count,
     individuals,
     roomName: room.name,
-    roomId
+    roomId,
+    vetoAvailable: average >= VETO_THRESHOLD,
+    veto
   };
+};
+
+// Start a veto vote
+const startVeto = (roomId, initiatorId, initiatorName) => {
+  const room = rooms.get(roomId);
+  if (!room || room.veto) return false;
+
+  const stats = getRoomStats(roomId);
+  if (stats.average < VETO_THRESHOLD) return false;
+
+  room.veto = {
+    initiatorId,
+    initiatorName: initiatorName || 'Someone',
+    votes: new Set([initiatorId]), // Initiator automatically votes yes
+    startTime: Date.now(),
+    endTime: Date.now() + VETO_DURATION
+  };
+
+  console.log(`Veto started in room ${roomId} by ${initiatorName}`);
+
+  // Broadcast veto started
+  broadcastToRoom(roomId);
+
+  // Set timeout to end veto
+  setTimeout(() => {
+    endVeto(roomId, false);
+  }, VETO_DURATION);
+
+  return true;
+};
+
+// Cast a veto vote
+const castVetoVote = (roomId, voterId) => {
+  const room = rooms.get(roomId);
+  if (!room || !room.veto) return false;
+
+  room.veto.votes.add(voterId);
+
+  // Check if majority reached
+  const realUsers = Array.from(room.users.values()).filter(u => !u.isBot && u.ws);
+  const needed = Math.ceil(realUsers.length / 2);
+
+  if (room.veto.votes.size >= needed) {
+    endVeto(roomId, true);
+    return true;
+  }
+
+  broadcastToRoom(roomId);
+  return true;
+};
+
+// End veto voting
+const endVeto = (roomId, passed) => {
+  const room = rooms.get(roomId);
+  if (!room || !room.veto) return;
+
+  const voteCount = room.veto.votes.size;
+  room.veto = null;
+
+  // Broadcast result
+  const message = JSON.stringify({
+    type: 'vetoResult',
+    passed,
+    votes: voteCount
+  });
+
+  room.users.forEach((user) => {
+    if (user.ws && user.ws.readyState === WebSocket.OPEN) {
+      user.ws.send(message);
+    }
+  });
+
+  console.log(`Veto in room ${roomId} ${passed ? 'PASSED' : 'failed'} with ${voteCount} votes`);
+
+  // Also broadcast updated stats (veto no longer active)
+  setTimeout(() => broadcastToRoom(roomId), 100);
 };
 
 // Broadcast to all users in a room
@@ -269,6 +360,17 @@ wss.on('connection', (ws, req) => {
           user.name = message.name.slice(0, 20);
           broadcastToRoom(roomId);
         }
+      }
+
+      // Veto actions
+      if (message.type === 'startVeto') {
+        const user = room.users.get(userId);
+        const name = user?.name || 'Someone';
+        startVeto(roomId, userId, name);
+      }
+
+      if (message.type === 'vetoVote') {
+        castVetoVote(roomId, userId);
       }
     } catch (err) {
       console.error('Invalid message:', err.message);

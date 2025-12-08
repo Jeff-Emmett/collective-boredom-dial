@@ -27,6 +27,9 @@ const useWebSocket = (roomId = 'global', userName = null) => {
   const [userCount, setUserCount] = useState(0);
   const [individuals, setIndividuals] = useState([]);
   const [error, setError] = useState(null);
+  const [vetoAvailable, setVetoAvailable] = useState(false);
+  const [veto, setVeto] = useState(null);
+  const [vetoResult, setVetoResult] = useState(null);
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
 
@@ -56,10 +59,19 @@ const useWebSocket = (roomId = 'global', userName = null) => {
             setGlobalBoredom(data.average || 50);
             setUserCount(data.count || 0);
             setIndividuals(data.individuals || []);
+            setVetoAvailable(data.vetoAvailable || false);
+            setVeto(data.veto || null);
           } else if (data.type === 'stats') {
             setGlobalBoredom(data.average || 50);
             setUserCount(data.count || 0);
             setIndividuals(data.individuals || []);
+            setVetoAvailable(data.vetoAvailable || false);
+            setVeto(data.veto || null);
+          } else if (data.type === 'vetoResult') {
+            setVetoResult({ passed: data.passed, votes: data.votes });
+            setVeto(null);
+            // Clear result after 5 seconds
+            setTimeout(() => setVetoResult(null), 5000);
           }
         } catch (err) {
           console.error('Failed to parse message:', err);
@@ -114,6 +126,22 @@ const useWebSocket = (roomId = 'global', userName = null) => {
     }
   }, []);
 
+  const startVeto = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'startVeto'
+      }));
+    }
+  }, []);
+
+  const voteVeto = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'vetoVote'
+      }));
+    }
+  }, []);
+
   return {
     isConnected,
     userId,
@@ -123,7 +151,12 @@ const useWebSocket = (roomId = 'global', userName = null) => {
     individuals,
     error,
     sendBoredom,
-    sendName
+    sendName,
+    vetoAvailable,
+    veto,
+    vetoResult,
+    startVeto,
+    voteVeto
   };
 };
 
@@ -310,7 +343,10 @@ function RoomPage() {
   const navigate = useNavigate();
   const [myBoredom, setMyBoredom] = useState(50);
   const [showShare, setShowShare] = useState(false);
-  const { isConnected, userId, roomName, globalBoredom, userCount, individuals, error, sendBoredom } = useWebSocket(roomId);
+  const {
+    isConnected, userId, roomName, globalBoredom, userCount, individuals, error, sendBoredom,
+    vetoAvailable, veto, vetoResult, startVeto, voteVeto
+  } = useWebSocket(roomId);
 
   const handleBoredomChange = useCallback((value) => {
     setMyBoredom(value);
@@ -453,6 +489,61 @@ function RoomPage() {
             ))}
           </div>
         </div>
+
+        {/* Veto Speaker Section */}
+        {vetoAvailable && !veto && !vetoResult && (
+          <div className="veto-section veto-available">
+            <div className="veto-alert">
+              <span className="veto-icon">⚠️</span>
+              <span className="veto-message">Collective boredom exceeds 66%!</span>
+            </div>
+            <button className="btn btn-veto" onClick={startVeto}>
+              🗳️ Veto Speaker
+            </button>
+          </div>
+        )}
+
+        {veto && (
+          <div className="veto-section veto-active">
+            <div className="veto-voting">
+              <h3 className="veto-title">🗳️ Veto in Progress!</h3>
+              <p className="veto-initiator">{veto.initiator} called for a vote</p>
+              <div className="veto-progress">
+                <div className="veto-bar">
+                  <div
+                    className="veto-bar-fill"
+                    style={{ width: `${(veto.votes / veto.needed) * 100}%` }}
+                  />
+                </div>
+                <span className="veto-count">{veto.votes} / {veto.needed} votes needed</span>
+              </div>
+              <div className="veto-timer">⏱️ {veto.timeLeft}s remaining</div>
+              <button className="btn btn-vote" onClick={voteVeto}>
+                ✋ Vote to Veto
+              </button>
+            </div>
+          </div>
+        )}
+
+        {vetoResult && (
+          <div className={`veto-section veto-result ${vetoResult.passed ? 'veto-passed' : 'veto-failed'}`}>
+            <div className="veto-result-content">
+              {vetoResult.passed ? (
+                <>
+                  <span className="veto-result-icon">🚫</span>
+                  <h3>Speaker Vetoed!</h3>
+                  <p>The group has spoken. Time for a change!</p>
+                </>
+              ) : (
+                <>
+                  <span className="veto-result-icon">✅</span>
+                  <h3>Veto Failed</h3>
+                  <p>Not enough votes. The speaker continues.</p>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </main>
 
       <footer className="app-footer">
