@@ -1,8 +1,26 @@
 services:
+  # WebSocket backend server
+  boredom-ws:
+    build: ./server
+    container_name: boredom-ws
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+    networks:
+      - boredom-internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Frontend (nginx + React)
   boredom-dial:
     build: .
     container_name: boredom-dial-prod
     restart: unless-stopped
+    depends_on:
+      - boredom-ws
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.boredom-dial.rule=Host(`bored.jeffemmett.com`)"
@@ -10,7 +28,10 @@ services:
       - "traefik.http.services.boredom-dial.loadbalancer.server.port=80"
     networks:
       - traefik-public
+      - boredom-internal
 
 networks:
   traefik-public:
     external: true
+  boredom-internal:
+    driver: bridge

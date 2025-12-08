@@ -1,0 +1,12 @@
+{
+  "name": "boredom-dial-server",
+  "version": "1.0.0",
+  "description": "WebSocket server for Collective Boredom Dial",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
